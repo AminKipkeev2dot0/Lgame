@@ -79,7 +79,7 @@ public:
              << targetTeam << ": " << target->name << " [" << target->position << "] and deals " << attack << " damage.\n";
     }
     void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName) override {
-        if (rand() % 100 < 45) { // 45% chance to clone
+        if (rand() % 100 < 10) { // Changed from 45% to 10% chance to clone
             for (size_t i = 0; i < team.size(); i++) {
                 if (team[i]->hp > 0 && (dynamic_cast<LightInfantry*>(team[i].get()) || dynamic_cast<Archer*>(team[i].get()))) {
                     auto cloned = team[i]->clone();
@@ -99,7 +99,7 @@ public:
 };
 
 class Healer : public Unit {
-    int healing_charges = 3;
+    int healing_charges = 5; // Increased from 3 to 5 charges
 public:
     Healer(int pos) {
         name = "Healer"; hp = max_hp = 50; attack = 8; position = pos; cost = 15;
@@ -109,10 +109,10 @@ public:
         if (healing_charges > 0) {
             for (auto& unit : team) {
                 if (unit->hp > 0 && unit->hp < 30 && dynamic_cast<Wizard*>(unit.get()) == nullptr) {
-                    unit->hp += 20;
+                    unit->hp += 5; // Reduced from 20 HP to 5 HP
                     healing_charges--;
                     cout << teamName << ": " << name << " [" << position << "] heals "
-                         << unit->name << " [" << unit->position << "] for 20 HP.\n";
+                         << unit->name << " [" << unit->position << "] for 5 HP.\n";
                     break;
                 }
             }
@@ -192,6 +192,7 @@ void createTeam(vector<unique_ptr<Unit>>& team, const string& teamName, int bala
             cout << "Invalid unit or insufficient balance.\n";
         }
     }
+    cout << "------------------\n"; // Line after team creation
 }
 
 void simulateRound(vector<unique_ptr<Unit>>& team1, vector<unique_ptr<Unit>>& team2, const string& team1Name, const string& team2Name, int round) {
@@ -247,24 +248,25 @@ int main() {
     cout << "Create game? (Yes/No): ";
     cin >> input;
     if (input != "Yes") return 0;
-
+    system("clear");
     vector<unique_ptr<Unit>> team1, team2;
     string team1Name, team2Name;
     cout << "Enter Team 1 name: ";
     cin >> team1Name;
     cout << "Enter Team 2 name: ";
     cin >> team2Name;
-
-    createTeam(team1, team1Name, 150);
-    createTeam(team2, team2Name, 150);
-
+    cout<<"------------------"<<endl<<endl;
+    createTeam(team1, team1Name, 100); // Changed balance from 150 to 100
+    createTeam(team2, team2Name, 100); // Changed balance from 150 to 100
+    system("clear");
     gm->displayTeam(team1, team1Name);
     gm->displayTeam(team2, team2Name);
 
+    cout<<"------------------"<<endl<<endl;
     cout << "Press 'Start' to begin: ";
     cin >> input;
     if (input != "Start") return 0;
-
+    system("clear");
     int round = 1;
     while (gm->isTeamAlive(team1) && gm->isTeamAlive(team2)) {
         simulateRound(team1, team2, team1Name, team2Name, round++);
@@ -272,8 +274,9 @@ int main() {
         gm->cleanAndShift(team2);
         gm->displayTeam(team1, team1Name);
         gm->displayTeam(team2, team2Name);
+        cout << "------------------\n"; // Line after each round
     }
 
-    cout << (gm->isTeamAlive(team1) ? team1Name : team2Name) << " wins!\n";
+    cout << "\n"<< (gm->isTeamAlive(team1) ? team1Name : team2Name) << " wins!\n";
     return 0;
 }
