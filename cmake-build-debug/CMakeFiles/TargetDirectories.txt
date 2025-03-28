@@ -1,0 +1,3 @@
+/Users/aminkipkeev/CLionProjects/Lgame/cmake-build-debug/CMakeFiles/Lgame.dir
+/Users/aminkipkeev/CLionProjects/Lgame/cmake-build-debug/CMakeFiles/edit_cache.dir
+/Users/aminkipkeev/CLionProjects/Lgame/cmake-build-debug/CMakeFiles/rebuild_cache.dir
