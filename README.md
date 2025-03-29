@@ -32,6 +32,8 @@
 
 ## Классы и их описание
 
+![img.png](img.png)
+
 ### Базовый класс: `Unit`
 - **Назначение**: Абстрактный базовый класс для всех типов юнитов, определяющий общие атрибуты и поведение.
 - **Атрибуты**:
@@ -114,3 +116,4 @@
 <img width="679" alt="Screenshot 2025-03-29 at 01 35 41" src="https://github.com/user-attachments/assets/25608e13-4821-4ff8-a268-ddc3f2c4bce2" />
 <img width="679" alt="Screenshot 2025-03-29 at 01 36 05" src="https://github.com/user-attachments/assets/07cf6335-747f-4e31-acf9-9bf913377a2a" />
 
+[![](https://img.plantuml.biz/plantuml/svg/tLHDRzGm4BtdLrWze6sxMwaSerNKlG2LW0CVubZDEkxk2CSEzcH5-E2tCyueMeUYHXKW43VFpFERvvV9N4M2G5rZ2zX62g19QGinghSEINqkb5fn6jrEEMXC2j6HshVZgO6FDyS8Y42_7wFMHoJqReorZyJdSq6b1WjklZDK3jtEbaeg9hmnq9HA6Y-LWFBSQQaE7ckrNe-ggoenQ-kTMN2rS_YXCpSjXNMYhkuWOsiqWjriqIBr2nh83qQJ3-iVBrUFbYe1Nh83TnKSaFq3AxJVXbUbecIBhqKXVZx7tPwktIqu2lrWxFaajM2tIeMEJd-hHVUwSbJtpC2XdwgJr3-XRXFqtWIH9UU_g-STVe9GYnuv_q4zlpwf3nm4ErWz_kaSCycDtYUDCR48vBzvSGgV09EFWw-30JBobhurHz7ZYt--No81eQuovgUiwGKus8s62eGf-E2qANF4MMhDdbnBaKLFota7HjOOMmjzSd36e7lzmPWODXOFPeQ6BsszjsAg0RTnzUiztjBSvycQYR4Y-Q7VTAcsOCKqT9GF2pQTPTfNldFrm7ivI_nu5d4vwIsNfgcG-kLYqdTF76hzPRMQhliids_LF2zhBKl8NfdUj8meydczkAZKW2YLc1kBVEZyQbMfamPSVpB2cbHYs9LnTTVOxm00)](https://editor.plantuml.com/uml/tLHDRzGm4BtdLrWze6sxMwaSerNKlG2LW0CVubZDEkxk2CSEzcH5-E2tCyueMeUYHXKW43VFpFERvvV9N4M2G5rZ2zX62g19QGinghSEINqkb5fn6jrEEMXC2j6HshVZgO6FDyS8Y42_7wFMHoJqReorZyJdSq6b1WjklZDK3jtEbaeg9hmnq9HA6Y-LWFBSQQaE7ckrNe-ggoenQ-kTMN2rS_YXCpSjXNMYhkuWOsiqWjriqIBr2nh83qQJ3-iVBrUFbYe1Nh83TnKSaFq3AxJVXbUbecIBhqKXVZx7tPwktIqu2lrWxFaajM2tIeMEJd-hHVUwSbJtpC2XdwgJr3-XRXFqtWIH9UU_g-STVe9GYnuv_q4zlpwf3nm4ErWz_kaSCycDtYUDCR48vBzvSGgV09EFWw-30JBobhurHz7ZYt--No81eQuovgUiwGKus8s62eGf-E2qANF4MMhDdbnBaKLFota7HjOOMmjzSd36e7lzmPWODXOFPeQ6BsszjsAg0RTnzUiztjBSvycQYR4Y-Q7VTAcsOCKqT9GF2pQTPTfNldFrm7ivI_nu5d4vwIsNfgcG-kLYqdTF76hzPRMQhliids_LF2zhBKl8NfdUj8meydczkAZKW2YLc1kBVEZyQbMfamPSVpB2cbHYs9LnTTVOxm00)
