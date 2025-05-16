@@ -7,8 +7,22 @@
 #include <fstream>
 #include <sstream>
 #include <cctype>
+#include <map>
 
 using namespace std;
+
+// === Buff Structure ===
+struct Buff {
+    string name;
+    int hp_boost, attack_boost, extra_attacks, armor, cost, damage_threshold;
+};
+
+const map<string, Buff> BUFFS = {
+    {"Ho", {"Horse", 5, 0, 2, 0, 5, 15}},
+    {"Sp", {"Spear", 0, 5, 0, 0, 3, 10}},
+    {"Sh", {"Shield", 0, 0, 0, 10, 4, 20}},
+    {"He", {"Helmet", 5, 0, 0, 0, 2, 25}}
+};
 
 // === Базовый класс юнита ===
 class Unit {
@@ -40,7 +54,7 @@ public:
         position = pos;
     }
     void boostAllies(vector<unique_ptr<Unit>>& team, const string& teamName, int round) {
-        if (round != 1) return; // Only boost in Round 1
+        if (round != 1) return;
         for (auto& unit : team) {
             if (unit->hp > 0 && abs(unit->position - position) == 1) {
                 unit->hp += 10;
@@ -85,19 +99,101 @@ private:
 // === Конкретные классы юнитов ===
 class LightInfantry : public Unit {
 public:
-    LightInfantry(int pos) {
-        name = "Light Infantry"; hp = max_hp = 50; attack = 8; position = pos; cost = 10;
+    vector<string> active_buffs;
+    int total_damage_taken = 0;
+    int armor = 0;
+    LightInfantry(int pos, const vector<string>& buffs = {}) {
+        name = "Light Infantry";
+        hp = max_hp = 50;
+        attack = 8;
+        position = pos;
+        cost = 10;
+        active_buffs = buffs;
+        applyBuffs();
+    }
+    void applyBuffs() {
+        hp = max_hp = 50;
+        attack = 8;
+        armor = 0;
+        for (const auto& buff : active_buffs) {
+            auto it = BUFFS.find(buff);
+            if (it != BUFFS.end()) {
+                hp += it->second.hp_boost;
+                max_hp += it->second.hp_boost;
+                attack += it->second.attack_boost;
+                armor += it->second.armor;
+            }
+        }
+    }
+    void applyDamage(int damage) {
+        int reduced_damage = max(0, damage - armor);
+        hp -= reduced_damage;
+        if (reduced_damage > 0) {
+            total_damage_taken += reduced_damage;
+            checkBuffLoss();
+        }
+        if (hp < 0) hp = 0;
+    }
+    void checkBuffLoss() {
+        vector<string> remaining_buffs;
+        for (const auto& buff : active_buffs) {
+            auto it = BUFFS.find(buff);
+            if (it != BUFFS.end() && total_damage_taken <= it->second.damage_threshold) {
+                remaining_buffs.push_back(buff);
+            } else if (it != BUFFS.end()) {
+                cout << name << " [" << position << "] loses " << it->second.name
+                     << " due to " << total_damage_taken << " damage taken.\n";
+                if (it->second.hp_boost > 0) {
+                    max_hp -= it->second.hp_boost;
+                    hp = min(hp, max_hp);
+                }
+            }
+        }
+        active_buffs = remaining_buffs;
+        applyBuffs(); // Reapply remaining buffs to update stats
     }
     void attackUnit(Unit* target, const string& attackerTeam, const string& targetTeam) override {
         if (!target) return;
-        int attacks = rand() % 2 + 2;
+        int attacks = rand() % 2 + (hasBuff("Ho") ? 4 : 2);
         for (int i = 0; i < attacks && target->hp > 0; i++) {
-            target->hp -= attack;
             cout << attackerTeam << ": " << name << " [" << position << "] attacks "
                  << targetTeam << ": " << target->name << " [" << target->position << "] and deals " << attack << " damage.\n";
+            if (auto li = dynamic_cast<LightInfantry*>(target)) {
+                li->applyDamage(attack);
+            } else {
+                target->hp -= attack;
+            }
         }
     }
-    unique_ptr<Unit> clone() const override { return make_unique<LightInfantry>(position); }
+    bool hasBuff(const string& buff_code) const {
+        return find(active_buffs.begin(), active_buffs.end(), buff_code) != active_buffs.end();
+    }
+    unique_ptr<Unit> clone() const override {
+        auto li = make_unique<LightInfantry>(position, active_buffs);
+        li->hp = hp;
+        li->max_hp = max_hp;
+        li->total_damage_taken = total_damage_taken;
+        li->applyBuffs();
+        return li;
+    }
+    void saveExtra(ofstream& out) const override {
+        out << max_hp << ' ' << total_damage_taken << ' ';
+        for (const auto& buff : active_buffs) out << buff;
+        out << ' ';
+    }
+    void loadExtra(istringstream& iss) override {
+        iss >> max_hp >> total_damage_taken;
+        string buff_str;
+        iss >> buff_str;
+        active_buffs.clear();
+        for (size_t i = 0; i < buff_str.size(); i += 2) {
+            string buff_code = buff_str.substr(i, 2);
+            if (BUFFS.find(buff_code) != BUFFS.end()) {
+                active_buffs.push_back(buff_code);
+            }
+        }
+        applyBuffs();
+    }
 };
 
 class HeavyInfantry : public Unit {
@@ -107,9 +203,13 @@ public:
     }
     void attackUnit(Unit* target, const string& attackerTeam, const string& targetTeam) override {
         if (!target) return;
-        target->hp -= attack;
         cout << attackerTeam << ": " << name << " [" << position << "] attacks "
              << targetTeam << ": " << target->name << " [" << target->position << "] and deals " << attack << " damage.\n";
+        if (auto li = dynamic_cast<LightInfantry*>(target)) {
+            li->applyDamage(attack);
+        } else {
+            target->hp -= attack;
+        }
     }
     unique_ptr<Unit> clone() const override { return make_unique<HeavyInfantry>(position); }
 };
@@ -123,9 +223,13 @@ public:
         if (!target) return;
         int attacks = rand() % 5 + 1;
         for (int i = 0; i < attacks && target->hp > 0; i++) {
-            target->hp -= attack;
             cout << attackerTeam << ": " << name << " [" << position << "] attacks "
                  << targetTeam << ": " << target->name << " [" << target->position << "] and deals " << attack << " damage.\n";
+            if (auto li = dynamic_cast<LightInfantry*>(target)) {
+                li->applyDamage(attack);
+            } else {
+                target->hp -= attack;
+            }
         }
     }
     unique_ptr<Unit> clone() const override { return make_unique<Archer>(position); }
@@ -138,9 +242,13 @@ public:
     }
     void attackUnit(Unit* target, const string& attackerTeam, const string& targetTeam) override {
         if (!target) return;
-        target->hp -= attack;
         cout << attackerTeam << ": " << name << " [" << position << "] attacks "
              << targetTeam << ": " << target->name << " [" << target->position << "] and deals " << attack << " damage.\n";
+        if (auto li = dynamic_cast<LightInfantry*>(target)) {
+            li->applyDamage(attack);
+        } else {
+            target->hp -= attack;
+        }
     }
     void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName, int round) override {
         if (rand() % 100 < 10) {
@@ -228,7 +336,19 @@ public:
             return;
         }
         for (const auto& unit : team) {
-            cout << "[" << unit->position << "] " << unit->name << " - " << unit->hp << "/" << unit->max_hp << " HP\n";
+            cout << "[" << unit->position << "] " << unit->name << " - " << unit->hp << "/" << unit->max_hp << " HP";
+            if (auto li = dynamic_cast<LightInfantry*>(unit.get())) {
+                if (!li->active_buffs.empty()) {
+                    cout << " (Buffs: ";
+                    for (size_t i = 0; i < li->active_buffs.size(); ++i) {
+                        auto it = BUFFS.find(li->active_buffs[i]);
+                        cout << (it != BUFFS.end() ? it->second.name : li->active_buffs[i]);
+                        if (i < li->active_buffs.size() - 1) cout << ", ";
+                    }
+                    cout << ")";
+                }
+            }
+            cout << "\n";
         }
     }
 
@@ -247,19 +367,60 @@ public:
     void createTeam(vector<unique_ptr<Unit>>& team, const string& teamName, int balance) {
         cout << teamName << " - Starting balance: " << balance << "\n";
         cout << "Units: LI (10), HI (30), A (20), W (30), H (15), Gu (25)\n";
+        cout << "Buffs for LI: Horse (5, +5 HP, +2 attacks), Spear (3, +5 attack), Shield (4, +10 armor), Helmet (2, +5 HP)\n";
         int pos = 1;
         while (balance > 0) {
             string type;
             cout << "Enter unit type (or 'done' to finish): ";
             cin >> type;
             if (type == "done") break;
-            auto unit = UnitFactory::createUnit(type, pos++);
-            if (unit && balance >= unit->cost) {
-                balance -= unit->cost;
-                team.push_back(move(unit));
-                cout << "Added " << team.back()->name << ". Remaining balance: " << balance << "\n";
+            vector<string> buffs;
+            if (type == "LI" || type == "L") {
+                cout << "Enter buffs for Light Infantry (Ho, Sp, Sh, He, or none, space-separated): ";
+                cin.ignore(numeric_limits<streamsize>::max(), '\n');
+                string buff_input;
+                getline(cin, buff_input);
+                istringstream iss(buff_input);
+                string buff_code;
+                int buff_cost = 0;
+                while (iss >> buff_code) {
+                    auto it = BUFFS.find(buff_code);
+                    if (it != BUFFS.end() && find(buffs.begin(), buffs.end(), buff_code) == buffs.end()) {
+                        buffs.push_back(buff_code);
+                        buff_cost += it->second.cost;
+                    } else {
+                        cout << "Invalid or duplicate buff: " << buff_code << "\n";
+                    }
+                }
+                auto unit = make_unique<LightInfantry>(pos, buffs);
+                if (balance >= unit->cost + buff_cost) {
+                    balance -= unit->cost + buff_cost;
+                    team.push_back(move(unit));
+                    cout << "Added " << team.back()->name << " with buffs";
+                    if (buffs.empty()) cout << " (none)";
+                    else {
+                        cout << ": ";
+                        for (size_t i = 0; i < buffs.size(); ++i) {
+                            auto it = BUFFS.find(buffs[i]);
+                            cout << (it != BUFFS.end() ? it->second.name : buffs[i]);
+                            if (i < buffs.size() - 1) cout << ", ";
+                        }
+                    }
+                    cout << ". Remaining balance: " << balance << "\n";
+                    pos++;
+                } else {
+                    cout << "Insufficient balance for unit and buffs.\n";
+                }
             } else {
-                cout << "Invalid unit or insufficient balance.\n";
+                auto unit = UnitFactory::createUnit(type, pos);
+                if (unit && balance >= unit->cost) {
+                    balance -= unit->cost;
+                    team.push_back(move(unit));
+                    cout << "Added " << team.back()->name << ". Remaining balance: " << balance << "\n";
+                    pos++;
+                } else {
+                    cout << "Invalid unit or insufficient balance.\n";
+                }
             }
         }
         cout << "------------------\n";
