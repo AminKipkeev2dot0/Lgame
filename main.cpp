@@ -17,15 +17,69 @@ public:
     int hp, max_hp, attack, position, cost;
     virtual void attackUnit(Unit* target, const string& attackerTeam, const string& targetTeam) = 0;
     virtual unique_ptr<Unit> clone() const = 0;
-    virtual void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName) {}
-    virtual void saveExtra(ofstream& out) const {}
-    virtual void loadExtra(istringstream& iss) {}
+    virtual void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName, int round) {}
+    virtual void saveExtra(ofstream& out) const { out << max_hp << ' '; }
+    virtual void loadExtra(istringstream& iss) { iss >> max_hp; }
     virtual void updatePositions(vector<unique_ptr<Unit>>& team) {
         for (size_t i = 0; i < team.size(); ++i) {
             team[i]->position = i + 1;
         }
     }
     virtual ~Unit() = default;
+};
+
+// === GuliayGorod (Adaptee) ===
+class GuliayGorod {
+public:
+    string name;
+    int hp, max_hp, cost;
+    GuliayGorod(int pos) {
+        name = "GuliayGorod";
+        hp = max_hp = 80;
+        cost = 25;
+        position = pos;
+    }
+    void boostAllies(vector<unique_ptr<Unit>>& team, const string& teamName, int round) {
+        if (round != 1) return; // Only boost in Round 1
+        for (auto& unit : team) {
+            if (unit->hp > 0 && abs(unit->position - position) == 1) {
+                unit->hp += 10;
+                unit->max_hp += 10;
+                cout << teamName << ": GuliayGorod [" << position << "] boosts "
+                     << unit->name << " [" << unit->position << "] HP and max HP to " << unit->hp << ".\n";
+            }
+        }
+    }
+    int getPosition() const { return position; }
+    void setPosition(int pos) { position = pos; }
+private:
+    int position;
+};
+
+// === Адаптер для GuliayGorod ===
+class GuliayGorodAdapter : public Unit {
+public:
+    GuliayGorodAdapter(int pos) : guliayGorod(pos) {
+        name = guliayGorod.name;
+        hp = guliayGorod.hp;
+        max_hp = guliayGorod.max_hp;
+        attack = 0;
+        position = pos;
+        cost = guliayGorod.cost;
+    }
+    void attackUnit(Unit*, const string&, const string&) override {}
+    void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName, int round) override {
+        guliayGorod.boostAllies(team, teamName, round);
+    }
+    unique_ptr<Unit> clone() const override {
+        auto adapter = make_unique<GuliayGorodAdapter>(position);
+        adapter->hp = hp;
+        return adapter;
+    }
+    void saveExtra(ofstream& out) const override {}
+    void loadExtra(istringstream& iss) override {}
+private:
+    GuliayGorod guliayGorod;
 };
 
 // === Конкретные классы юнитов ===
@@ -88,15 +142,15 @@ public:
         cout << attackerTeam << ": " << name << " [" << position << "] attacks "
              << targetTeam << ": " << target->name << " [" << target->position << "] and deals " << attack << " damage.\n";
     }
-    void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName) override {
-        if (rand() % 100 < 10) {  // 10% chance to clone
+    void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName, int round) override {
+        if (rand() % 100 < 10) {
             for (size_t i = 0; i < team.size(); i++) {
                 if (team[i]->hp > 0 &&
                     (dynamic_cast<LightInfantry*>(team[i].get()) ||
                      dynamic_cast<Archer*>(team[i].get()))) {
                     string originalName = team[i]->name;
                     auto cloned = team[i]->clone();
-                    cloned->position = i + 2; // Set position for the new unit
+                    cloned->position = i + 2;
                     team.insert(team.begin() + i + 1, move(cloned));
                     cout << teamName << ": " << name << " [" << position << "] clones " << originalName << " at position " << i + 2 << "!\n";
                     updatePositions(team);
@@ -115,10 +169,12 @@ public:
         name = "Healer"; hp = max_hp = 50; attack = 8; position = pos; cost = 15;
     }
     void attackUnit(Unit*, const string&, const string&) override {}
-    void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName) override {
+    void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName, int round) override {
         if (healing_charges > 0) {
             for (auto& unit : team) {
-                if (unit->hp > 0 && unit->hp < 30 && dynamic_cast<Wizard*>(unit.get()) == nullptr) {
+                if (unit->hp > 0 && unit->hp < 30 &&
+                    dynamic_cast<Wizard*>(unit.get()) == nullptr &&
+                    dynamic_cast<GuliayGorodAdapter*>(unit.get()) == nullptr) {
                     unit->hp += 5;
                     healing_charges--;
                     cout << teamName << ": " << name << " [" << position << "] heals "
@@ -129,10 +185,10 @@ public:
         }
     }
     void saveExtra(ofstream& out) const override {
-        out << healing_charges << ' ';
+        out << max_hp << ' ' << healing_charges << ' ';
     }
     void loadExtra(istringstream& iss) override {
-        iss >> healing_charges;
+        iss >> max_hp >> healing_charges;
     }
     unique_ptr<Unit> clone() const override {
         auto healer = make_unique<Healer>(position);
@@ -150,6 +206,7 @@ public:
         if (type == "A") return make_unique<Archer>(pos);
         if (type == "W") return make_unique<Wizard>(pos);
         if (type == "H") return make_unique<Healer>(pos);
+        if (type == "Gu" || type == "G") return make_unique<GuliayGorodAdapter>(pos);
         return nullptr;
     }
 };
@@ -171,7 +228,7 @@ public:
             return;
         }
         for (const auto& unit : team) {
-            cout << "[" << unit->position << "] " << unit->name << " - " << unit->hp << " HP\n";
+            cout << "[" << unit->position << "] " << unit->name << " - " << unit->hp << "/" << unit->max_hp << " HP\n";
         }
     }
 
@@ -189,7 +246,7 @@ public:
 
     void createTeam(vector<unique_ptr<Unit>>& team, const string& teamName, int balance) {
         cout << teamName << " - Starting balance: " << balance << "\n";
-        cout << "Units: LI (10), HI (30), A (20), W (30), H (15)\n";
+        cout << "Units: LI (10), HI (30), A (20), W (30), H (15), Gu (25)\n";
         int pos = 1;
         while (balance > 0) {
             string type;
@@ -213,7 +270,7 @@ public:
         cout << "\nRound " << round << ":\n";
         for (auto& u : t1) {
             if (u->hp <= 0) continue;
-            u->specialAbility(t1, n1);
+            u->specialAbility(t1, n1, round);
             if (t2.empty()) break;
             if (dynamic_cast<Archer*>(u.get())) {
                 for (auto& tgt : t2) {
@@ -234,7 +291,7 @@ public:
 
         for (auto& u : t2) {
             if (u->hp <= 0) continue;
-            u->specialAbility(t2, n2);
+            u->specialAbility(t2, n2, round);
             if (t1.empty()) break;
             if (dynamic_cast<Archer*>(u.get())) {
                 for (auto& tgt : t1) {
@@ -368,7 +425,7 @@ int main() {
             cout << "Failed to load game. Starting new game.\n";
             choice = 1;
         } else {
-            srand(time(0)); // Reseed random number generator
+            srand(time(0));
         }
     }
 
