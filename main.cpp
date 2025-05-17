@@ -3,10 +3,8 @@
 #include <string>
 #include <cstdlib>
 #include <ctime>
-#include <memory>
 #include <fstream>
 #include <sstream>
-#include <cctype>
 #include <map>
 #include <chrono>
 #include <algorithm>
@@ -15,14 +13,14 @@
 
 using namespace std;
 
-// === Logger Interface ===
+
 class Logger {
 public:
     virtual void log(const string& message, const string& level = "INFO") = 0;
     virtual ~Logger() = default;
 };
 
-// === Real Logger (Console) ===
+
 class ConsoleLogger : public Logger {
 public:
     void log(const string& message, const string& level) override {
@@ -30,7 +28,7 @@ public:
     }
 };
 
-// === Logger Proxy ===
+
 class LoggerProxy : public Logger {
 public:
     LoggerProxy(const string& filename) : file_logger(filename.c_str(), ios::app) {
@@ -42,14 +40,14 @@ public:
         }
     }
     void log(const string& message, const string& level) override {
-        real_logger->log(message, level); // Log to console
+        real_logger->log(message, level);
         if (file_logger.is_open()) {
             auto now = chrono::system_clock::now();
             auto time = chrono::system_clock::to_time_t(now);
             string timestamp = ctime(&time);
             timestamp.pop_back();
             file_logger << "[" << timestamp << "] [" << level << "] " << message << "\n";
-            file_logger.flush(); // Ensure immediate write
+            file_logger.flush();
         }
     }
     ~LoggerProxy() {
@@ -62,7 +60,7 @@ private:
     ofstream file_logger;
 };
 
-// === Buff Structure ===
+
 struct Buff {
     string name;
     int hp_boost, attack_boost, extra_attacks, armor, cost, damage_threshold;
@@ -75,7 +73,7 @@ const map<string, Buff> BUFFS = {
     {"He", {"Helmet", 5, 0, 0, 0, 2, 25}}
 };
 
-// === Базовый класс юнита ===
+
 class Unit {
 public:
     string name;
@@ -93,7 +91,7 @@ public:
     virtual ~Unit() = default;
 };
 
-// === GuliayGorod (Adaptee) ===
+
 class GuliayGorod {
 public:
     string name;
@@ -121,7 +119,7 @@ private:
     int position;
 };
 
-// === Адаптер для GuliayGorod ===
+
 class GuliayGorodAdapter : public Unit {
 public:
     GuliayGorodAdapter(int pos) : guliayGorod(pos) {
@@ -147,7 +145,7 @@ private:
     GuliayGorod guliayGorod;
 };
 
-// === Конкретные классы юнитов ===
+
 class LightInfantry : public Unit {
 public:
     vector<string> active_buffs;
@@ -362,7 +360,7 @@ public:
     }
 };
 
-// === Factory Method Pattern ===
+
 class UnitFactory {
 public:
     virtual unique_ptr<Unit> createUnit(const string& type, int pos, Logger& logger) = 0;
@@ -370,7 +368,7 @@ public:
     virtual ~UnitFactory() = default;
 };
 
-// === Менеджер игры (Singleton) ===
+
 class GameManager {
     static GameManager* instance;
     GameManager() {}
@@ -469,17 +467,17 @@ public:
 };
 GameManager* GameManager::instance = nullptr;
 
-// === Command Design Pattern ===
+
 class Command {
 public:
     virtual void execute() = 0;
     virtual void undo() = 0;
-    virtual void redo() { execute(); } // Redo is same as execute by default
+    virtual void redo() { execute(); }
     virtual string description() const = 0;
     virtual ~Command() = default;
 };
 
-// === Create Team Command ===
+
 class CreateTeamCommand : public Command {
 public:
     CreateTeamCommand(vector<unique_ptr<Unit>>& team, const string& teamName, int balance,
@@ -491,7 +489,7 @@ public:
         team_.clear();
         balance_ = initialBalance_;
         gameManager_.createTeam(team_, teamName_, balance_, factory_, logger_);
-        // Store team state
+
         teamState_.clear();
         for (const auto& unit : team_) {
             teamState_.push_back(unit->clone());
@@ -508,7 +506,6 @@ public:
     void redo() override {
         team_.clear();
         balance_ = executedBalance_;
-        // Restore team state
         for (const auto& unit : teamState_) {
             team_.push_back(unit->clone());
         }
@@ -531,7 +528,7 @@ private:
     int executedBalance_;
 };
 
-// === Command Manager ===
+
 class CommandManager {
 public:
     CommandManager(Logger& logger) : logger_(logger) {}
@@ -586,7 +583,6 @@ private:
     Logger& logger_;
 };
 
-// === Factory Method Pattern ===
 class ManualUnitFactory : public UnitFactory {
 public:
     unique_ptr<Unit> createUnit(const string& type, int pos, Logger& logger) override {
@@ -666,7 +662,7 @@ public:
     unique_ptr<Unit> createUnit(const string& type, int pos, Logger& logger) override {
         if (type == "LI" || type == "L") {
             vector<string> buffs;
-            int num_buffs = rand() % 3; // 0-2 buffs
+            int num_buffs = rand() % 3;
             vector<string> available_buffs = {"Ho", "Sp", "Sh", "He"};
             shuffle(available_buffs.begin(), available_buffs.end(), std::default_random_engine(rand()));
             for (int i = 0; i < num_buffs; ++i) {
@@ -694,7 +690,7 @@ public:
         cout << "Buffs for LI: Horse (5, +5 HP, +2 attacks), Spear (3, +5 attack), Shield (4, +10 armor), Helmet (2, +5 HP)\n";
         int pos = 1;
         vector<string> unit_types = {"LI", "HI", "A", "W", "H", "Gu"};
-        int max_units = rand() % 6 + 3; // 3-8 units
+        int max_units = rand() % 6 + 3;
         while (balance > 0 && team.size() < max_units) {
             shuffle(unit_types.begin(), unit_types.end(), std::default_random_engine(rand()));
             string type = unit_types[0];
@@ -726,14 +722,14 @@ public:
                 cout << "Added " + team.back()->name + (type == "LI" || type == "L" ? " with buffs" + buff_list : "") + ". Remaining balance: " + to_string(balance) << "\n";
                 pos++;
             } else {
-                break; // Stop if balance is too low
+                break;
             }
         }
         logger.log("------------------", "INFO");
     }
 };
 
-// === Сохранение и загрузка ===
+
 void saveGame(const string& filename, const string& t1, const string& t2, int round,
               const vector<unique_ptr<Unit>>& team1, const vector<unique_ptr<Unit>>& team2, Logger& logger) {
     ofstream out(filename);
@@ -834,7 +830,7 @@ void loadGame(const string& filename, string& t1, string& t2, int& round,
     in.close();
 }
 
-// === Главная функция ===
+
 int main() {
     srand(time(0));
     LoggerProxy logger("game.log");
@@ -872,7 +868,6 @@ int main() {
         cout << "Enter Team 2 name: ";
         getline(cin, t2);
 
-        // Team 1 creation
         while (true) {
             cout << "Choose team creation method for " << t1 << ": 1. Manual, 2. Automatic\nChoice: ";
             int team1_choice;
@@ -893,7 +888,7 @@ int main() {
             cout << "Undo team creation for " << t1 << "? (y/n): ";
             cin >> input;
             if (input != "y") {
-                break; // Team accepted, proceed to Team 2
+                break;
             }
 
             commandManager.undo();
@@ -907,7 +902,7 @@ int main() {
                     cout << "Undo team creation for " << t1 << "? (y/n): ";
                     cin >> input;
                     if (input != "y") {
-                        break; // Redone team accepted
+                        break;
                     }
                     commandManager.undo();
                     gm->displayTeam(team1, t1, logger);
@@ -918,15 +913,14 @@ int main() {
             cin >> input;
             if (input == "y") {
                 logger.log("Starting new team creation for " + t1, "INFO");
-                commandManager.clear(); // Clear undo/redo history
-                cin.ignore(numeric_limits<streamsize>::max(), '\n'); // Clear input buffer
-                continue; // Restart Team 1 creation
+                commandManager.clear();
+                cin.ignore(numeric_limits<streamsize>::max(), '\n');
+                continue;
             } else {
-                break; // Accept empty team and proceed
+                break;
             }
         }
 
-        // Team 2 creation
         while (true) {
             cout << "Choose team creation method for " << t2 << ": 1. Manual, 2. Automatic\nChoice: ";
             int team2_choice;
@@ -947,7 +941,7 @@ int main() {
             cout << "Undo team creation for " << t2 << "? (y/n): ";
             cin >> input;
             if (input != "y") {
-                break; // Team accepted, proceed to game
+                break;
             }
 
             commandManager.undo();
@@ -961,7 +955,7 @@ int main() {
                     cout << "Undo team creation for " << t2 << "? (y/n): ";
                     cin >> input;
                     if (input != "y") {
-                        break; // Redone team accepted
+                        break;
                     }
                     commandManager.undo();
                     gm->displayTeam(team2, t2, logger);
@@ -972,15 +966,14 @@ int main() {
             cin >> input;
             if (input == "y") {
                 logger.log("Starting new team creation for " + t2, "INFO");
-                commandManager.clear(); // Clear undo/redo history
-                cin.ignore(numeric_limits<streamsize>::max(), '\n'); // Clear input buffer
-                continue; // Restart Team 2 creation
+                commandManager.clear();
+                cin.ignore(numeric_limits<streamsize>::max(), '\n');
+                continue;
             } else {
-                break; // Accept empty team and proceed
+                break;
             }
         }
 
-        // Clear command history before starting game
         commandManager.clear();
     }
 
