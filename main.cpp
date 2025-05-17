@@ -11,6 +11,7 @@
 #include <chrono>
 #include <algorithm>
 #include <random>
+#include <stack>
 
 using namespace std;
 
@@ -80,8 +81,8 @@ public:
     string name;
     int hp, max_hp, attack, position, cost;
     virtual void attackUnit(Unit* target, const string& attackerTeam, const string& targetTeam, Logger& logger) = 0;
-    virtual unique_ptr<Unit> clone() const = 0;
     virtual void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName, int round, Logger& logger) {}
+    virtual unique_ptr<Unit> clone() const = 0;
     virtual void saveExtra(ofstream& out) const { out << max_hp << ' '; }
     virtual void loadExtra(istringstream& iss) { iss >> max_hp; }
     virtual void updatePositions(vector<unique_ptr<Unit>>& team) {
@@ -369,6 +370,223 @@ public:
     virtual ~UnitFactory() = default;
 };
 
+// === Менеджер игры (Singleton) ===
+class GameManager {
+    static GameManager* instance;
+    GameManager() {}
+public:
+    static GameManager* getInstance() {
+        if (!instance) instance = new GameManager();
+        return instance;
+    }
+
+    void displayTeam(const vector<unique_ptr<Unit>>& team, const string& teamName, Logger& logger) {
+        logger.log(teamName + ":", "INFO");
+        if (team.empty()) {
+            logger.log("No units remaining.", "INFO");
+            return;
+        }
+        for (const auto& unit : team) {
+            string unit_info = "[" + to_string(unit->position) + "] " + unit->name + " - " +
+                               to_string(unit->hp) + "/" + to_string(unit->max_hp) + " HP";
+            if (auto li = dynamic_cast<LightInfantry*>(unit.get())) {
+                if (!li->active_buffs.empty()) {
+                    unit_info += " (Buffs: ";
+                    for (size_t i = 0; i < li->active_buffs.size(); ++i) {
+                        auto it = BUFFS.find(li->active_buffs[i]);
+                        unit_info += (it != BUFFS.end() ? it->second.name : li->active_buffs[i]);
+                        if (i < li->active_buffs.size() - 1) unit_info += ", ";
+                    }
+                    unit_info += ")";
+                }
+            }
+            logger.log(unit_info, "INFO");
+        }
+    }
+
+    bool isTeamAlive(const vector<unique_ptr<Unit>>& team) {
+        return !team.empty();
+    }
+
+    void cleanAndShift(vector<unique_ptr<Unit>>& team) {
+        team.erase(remove_if(team.begin(), team.end(),
+            [](const unique_ptr<Unit>& u) { return u->hp <= 0; }), team.end());
+        for (size_t i = 0; i < team.size(); i++) {
+            team[i]->position = i + 1;
+        }
+    }
+
+    void createTeam(vector<unique_ptr<Unit>>& team, const string& teamName, int balance, UnitFactory& factory, Logger& logger) {
+        factory.createTeam(team, teamName, balance, logger);
+        displayTeam(team, teamName, logger);
+    }
+
+    void simulateRound(vector<unique_ptr<Unit>>& t1, vector<unique_ptr<Unit>>& t2,
+                       const string& n1, const string& n2, int round, Logger& logger) {
+        logger.log("\nRound " + to_string(round) + ":", "INFO");
+        for (auto& u : t1) {
+            if (u->hp <= 0) continue;
+            u->specialAbility(t1, n1, round, logger);
+            if (t2.empty()) break;
+            if (dynamic_cast<Archer*>(u.get())) {
+                for (auto& tgt : t2) {
+                    if (tgt->hp > 0 && abs(u->position - tgt->position) <= 3) {
+                        u->attackUnit(tgt.get(), n1, n2, logger);
+                        break;
+                    }
+                }
+            } else if (u->position == 1) {
+                for (auto& tgt : t2) {
+                    if (tgt->hp > 0 && tgt->position == 1) {
+                        u->attackUnit(tgt.get(), n1, n2, logger);
+                        break;
+                    }
+                }
+            }
+        }
+
+        for (auto& u : t2) {
+            if (u->hp <= 0) continue;
+            u->specialAbility(t2, n2, round, logger);
+            if (t1.empty()) break;
+            if (dynamic_cast<Archer*>(u.get())) {
+                for (auto& tgt : t1) {
+                    if (tgt->hp > 0 && abs(u->position - tgt->position) <= 3) {
+                        u->attackUnit(tgt.get(), n2, n1, logger);
+                        break;
+                    }
+                }
+            } else if (u->position == 1) {
+                for (auto& tgt : t1) {
+                    if (tgt->hp > 0 && tgt->position == 1) {
+                        u->attackUnit(tgt.get(), n2, n1, logger);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+};
+GameManager* GameManager::instance = nullptr;
+
+// === Command Design Pattern ===
+class Command {
+public:
+    virtual void execute() = 0;
+    virtual void undo() = 0;
+    virtual void redo() { execute(); } // Redo is same as execute by default
+    virtual string description() const = 0;
+    virtual ~Command() = default;
+};
+
+// === Create Team Command ===
+class CreateTeamCommand : public Command {
+public:
+    CreateTeamCommand(vector<unique_ptr<Unit>>& team, const string& teamName, int balance,
+                     UnitFactory& factory, GameManager& gameManager, Logger& logger)
+        : team_(team), teamName_(teamName), initialBalance_(balance), factory_(factory),
+          gameManager_(gameManager), logger_(logger), balance_(balance) {}
+
+    void execute() override {
+        team_.clear();
+        balance_ = initialBalance_;
+        gameManager_.createTeam(team_, teamName_, balance_, factory_, logger_);
+        // Store team state
+        teamState_.clear();
+        for (const auto& unit : team_) {
+            teamState_.push_back(unit->clone());
+        }
+        executedBalance_ = balance_;
+    }
+
+    void undo() override {
+        team_.clear();
+        balance_ = initialBalance_;
+        logger_.log("Undoing team creation for " + teamName_, "INFO");
+    }
+
+    void redo() override {
+        team_.clear();
+        balance_ = executedBalance_;
+        // Restore team state
+        for (const auto& unit : teamState_) {
+            team_.push_back(unit->clone());
+        }
+        logger_.log("Redoing team creation for " + teamName_, "INFO");
+    }
+
+    string description() const override {
+        return "Team creation for " + teamName_;
+    }
+
+private:
+    vector<unique_ptr<Unit>>& team_;
+    string teamName_;
+    int initialBalance_;
+    UnitFactory& factory_;
+    GameManager& gameManager_;
+    Logger& logger_;
+    int balance_;
+    vector<unique_ptr<Unit>> teamState_;
+    int executedBalance_;
+};
+
+// === Command Manager ===
+class CommandManager {
+public:
+    CommandManager(Logger& logger) : logger_(logger) {}
+
+    void execute(unique_ptr<Command> command) {
+        command->execute();
+        executedCommands_.push(std::move(command));
+        while (!undoneCommands_.empty()) {
+            undoneCommands_.pop();
+        }
+    }
+
+    bool canUndo() const {
+        return !executedCommands_.empty();
+    }
+
+    bool canRedo() const {
+        return !undoneCommands_.empty();
+    }
+
+    void undo() {
+        if (!canUndo()) return;
+        auto command = std::move(executedCommands_.top());
+        logger_.log("Performing undo operation: " + command->description(), "INFO");
+        executedCommands_.pop();
+        command->undo();
+        undoneCommands_.push(std::move(command));
+    }
+
+    void redo() {
+        if (!canRedo()) return;
+        auto command = std::move(undoneCommands_.top());
+        logger_.log("Performing redo operation: " + command->description(), "INFO");
+        undoneCommands_.pop();
+        command->redo();
+        executedCommands_.push(std::move(command));
+    }
+
+    void clear() {
+        while (!executedCommands_.empty()) executedCommands_.pop();
+        while (!undoneCommands_.empty()) undoneCommands_.pop();
+    }
+
+    string lastCommandDescription() const {
+        if (executedCommands_.empty()) return "No commands to undo";
+        return executedCommands_.top()->description();
+    }
+
+private:
+    stack<unique_ptr<Command>> executedCommands_;
+    stack<unique_ptr<Command>> undoneCommands_;
+    Logger& logger_;
+};
+
+// === Factory Method Pattern ===
 class ManualUnitFactory : public UnitFactory {
 public:
     unique_ptr<Unit> createUnit(const string& type, int pos, Logger& logger) override {
@@ -515,104 +733,6 @@ public:
     }
 };
 
-// === Менеджер игры (Singleton) ===
-class GameManager {
-    static GameManager* instance;
-    GameManager() {}
-public:
-    static GameManager* getInstance() {
-        if (!instance) instance = new GameManager();
-        return instance;
-    }
-
-    void displayTeam(const vector<unique_ptr<Unit>>& team, const string& teamName, Logger& logger) {
-        logger.log(teamName + ":", "INFO");
-        if (team.empty()) {
-            logger.log("No units remaining.", "INFO");
-            return;
-        }
-        for (const auto& unit : team) {
-            string unit_info = "[" + to_string(unit->position) + "] " + unit->name + " - " +
-                               to_string(unit->hp) + "/" + to_string(unit->max_hp) + " HP";
-            if (auto li = dynamic_cast<LightInfantry*>(unit.get())) {
-                if (!li->active_buffs.empty()) {
-                    unit_info += " (Buffs: ";
-                    for (size_t i = 0; i < li->active_buffs.size(); ++i) {
-                        auto it = BUFFS.find(li->active_buffs[i]);
-                        unit_info += (it != BUFFS.end() ? it->second.name : li->active_buffs[i]);
-                        if (i < li->active_buffs.size() - 1) unit_info += ", ";
-                    }
-                    unit_info += ")";
-                }
-            }
-            logger.log(unit_info, "INFO");
-        }
-    }
-
-    bool isTeamAlive(const vector<unique_ptr<Unit>>& team) {
-        return !team.empty();
-    }
-
-    void cleanAndShift(vector<unique_ptr<Unit>>& team) {
-        team.erase(remove_if(team.begin(), team.end(),
-            [](const unique_ptr<Unit>& u) { return u->hp <= 0; }), team.end());
-        for (size_t i = 0; i < team.size(); i++) {
-            team[i]->position = i + 1;
-        }
-    }
-
-    void createTeam(vector<unique_ptr<Unit>>& team, const string& teamName, int balance, UnitFactory& factory, Logger& logger) {
-        factory.createTeam(team, teamName, balance, logger);
-    }
-
-    void simulateRound(vector<unique_ptr<Unit>>& t1, vector<unique_ptr<Unit>>& t2,
-                       const string& n1, const string& n2, int round, Logger& logger) {
-        logger.log("\nRound " + to_string(round) + ":", "INFO");
-        for (auto& u : t1) {
-            if (u->hp <= 0) continue;
-            u->specialAbility(t1, n1, round, logger);
-            if (t2.empty()) break;
-            if (dynamic_cast<Archer*>(u.get())) {
-                for (auto& tgt : t2) {
-                    if (tgt->hp > 0 && abs(u->position - tgt->position) <= 3) {
-                        u->attackUnit(tgt.get(), n1, n2, logger);
-                        break;
-                    }
-                }
-            } else if (u->position == 1) {
-                for (auto& tgt : t2) {
-                    if (tgt->hp > 0 && tgt->position == 1) {
-                        u->attackUnit(tgt.get(), n1, n2, logger);
-                        break;
-                    }
-                }
-            }
-        }
-
-        for (auto& u : t2) {
-            if (u->hp <= 0) continue;
-            u->specialAbility(t2, n2, round, logger);
-            if (t1.empty()) break;
-            if (dynamic_cast<Archer*>(u.get())) {
-                for (auto& tgt : t1) {
-                    if (tgt->hp > 0 && abs(u->position - tgt->position) <= 3) {
-                        u->attackUnit(tgt.get(), n2, n1, logger);
-                        break;
-                    }
-                }
-            } else if (u->position == 1) {
-                for (auto& tgt : t1) {
-                    if (tgt->hp > 0 && tgt->position == 1) {
-                        u->attackUnit(tgt.get(), n2, n1, logger);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-};
-GameManager* GameManager::instance = nullptr;
-
 // === Сохранение и загрузка ===
 void saveGame(const string& filename, const string& t1, const string& t2, int round,
               const vector<unique_ptr<Unit>>& team1, const vector<unique_ptr<Unit>>& team2, Logger& logger) {
@@ -719,6 +839,7 @@ int main() {
     srand(time(0));
     LoggerProxy logger("game.log");
     GameManager* gm = GameManager::getInstance();
+    CommandManager commandManager(logger);
     vector<unique_ptr<Unit>> team1, team2;
     string t1, t2, input;
     int round = 1;
@@ -752,36 +873,115 @@ int main() {
         getline(cin, t2);
 
         // Team 1 creation
-        cout << "Choose team creation method for " << t1 << ": 1. Manual, 2. Automatic\nChoice: ";
-        int team1_choice;
-        unique_ptr<UnitFactory> team1_factory;
-        if (!(cin >> team1_choice) || (team1_choice != 1 && team1_choice != 2)) {
-            logger.log("Invalid team creation choice for " + t1 + ". Defaulting to Manual.", "ERROR");
-            team1_factory = make_unique<ManualUnitFactory>();
-        } else {
-            if (team1_choice == 1) {
+        while (true) {
+            cout << "Choose team creation method for " << t1 << ": 1. Manual, 2. Automatic\nChoice: ";
+            int team1_choice;
+            unique_ptr<UnitFactory> team1_factory;
+            if (!(cin >> team1_choice) || (team1_choice != 1 && team1_choice != 2)) {
+                logger.log("Invalid team creation choice for " + t1 + ". Defaulting to Manual.", "ERROR");
                 team1_factory = make_unique<ManualUnitFactory>();
             } else {
-                team1_factory = make_unique<AutomaticUnitFactory>();
+                if (team1_choice == 1) {
+                    team1_factory = make_unique<ManualUnitFactory>();
+                } else {
+                    team1_factory = make_unique<AutomaticUnitFactory>();
+                }
+            }
+            auto command = make_unique<CreateTeamCommand>(team1, t1, 100, *team1_factory, *gm, logger);
+            commandManager.execute(std::move(command));
+
+            cout << "Undo team creation for " << t1 << "? (y/n): ";
+            cin >> input;
+            if (input != "y") {
+                break; // Team accepted, proceed to Team 2
+            }
+
+            commandManager.undo();
+            gm->displayTeam(team1, t1, logger);
+            if (commandManager.canRedo()) {
+                cout << "Redo last undone team creation for " << t1 << "? (y/n): ";
+                cin >> input;
+                if (input == "y") {
+                    commandManager.redo();
+                    gm->displayTeam(team1, t1, logger);
+                    cout << "Undo team creation for " << t1 << "? (y/n): ";
+                    cin >> input;
+                    if (input != "y") {
+                        break; // Redone team accepted
+                    }
+                    commandManager.undo();
+                    gm->displayTeam(team1, t1, logger);
+                }
+            }
+
+            cout << "Create a new team for " << t1 << "? (y/n): ";
+            cin >> input;
+            if (input == "y") {
+                logger.log("Starting new team creation for " + t1, "INFO");
+                commandManager.clear(); // Clear undo/redo history
+                cin.ignore(numeric_limits<streamsize>::max(), '\n'); // Clear input buffer
+                continue; // Restart Team 1 creation
+            } else {
+                break; // Accept empty team and proceed
             }
         }
-        gm->createTeam(team1, t1, 100, *team1_factory, logger);
 
         // Team 2 creation
-        cout << "Choose team creation method for " << t2 << ": 1. Manual, 2. Automatic\nChoice: ";
-        int team2_choice;
-        unique_ptr<UnitFactory> team2_factory;
-        if (!(cin >> team2_choice) || (team2_choice != 1 && team2_choice != 2)) {
-            logger.log("Invalid team creation choice for " + t2 + ". Defaulting to Manual.", "ERROR");
-            team2_factory = make_unique<ManualUnitFactory>();
-        } else {
-            if (team2_choice == 1) {
+        while (true) {
+            cout << "Choose team creation method for " << t2 << ": 1. Manual, 2. Automatic\nChoice: ";
+            int team2_choice;
+            unique_ptr<UnitFactory> team2_factory;
+            if (!(cin >> team2_choice) || (team2_choice != 1 && team2_choice != 2)) {
+                logger.log("Invalid team creation choice for " + t2 + ". Defaulting to Manual.", "ERROR");
                 team2_factory = make_unique<ManualUnitFactory>();
             } else {
-                team2_factory = make_unique<AutomaticUnitFactory>();
+                if (team2_choice == 1) {
+                    team2_factory = make_unique<ManualUnitFactory>();
+                } else {
+                    team2_factory = make_unique<AutomaticUnitFactory>();
+                }
+            }
+            auto command = make_unique<CreateTeamCommand>(team2, t2, 100, *team2_factory, *gm, logger);
+            commandManager.execute(std::move(command));
+
+            cout << "Undo team creation for " << t2 << "? (y/n): ";
+            cin >> input;
+            if (input != "y") {
+                break; // Team accepted, proceed to game
+            }
+
+            commandManager.undo();
+            gm->displayTeam(team2, t2, logger);
+            if (commandManager.canRedo()) {
+                cout << "Redo last undone team creation for " << t2 << "? (y/n): ";
+                cin >> input;
+                if (input == "y") {
+                    commandManager.redo();
+                    gm->displayTeam(team2, t2, logger);
+                    cout << "Undo team creation for " << t2 << "? (y/n): ";
+                    cin >> input;
+                    if (input != "y") {
+                        break; // Redone team accepted
+                    }
+                    commandManager.undo();
+                    gm->displayTeam(team2, t2, logger);
+                }
+            }
+
+            cout << "Create a new team for " << t2 << "? (y/n): ";
+            cin >> input;
+            if (input == "y") {
+                logger.log("Starting new team creation for " + t2, "INFO");
+                commandManager.clear(); // Clear undo/redo history
+                cin.ignore(numeric_limits<streamsize>::max(), '\n'); // Clear input buffer
+                continue; // Restart Team 2 creation
+            } else {
+                break; // Accept empty team and proceed
             }
         }
-        gm->createTeam(team2, t2, 100, *team2_factory, logger);
+
+        // Clear command history before starting game
+        commandManager.clear();
     }
 
     cout << "Type 'Start' to begin: ";
