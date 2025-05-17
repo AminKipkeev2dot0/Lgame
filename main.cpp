@@ -9,6 +9,8 @@
 #include <cctype>
 #include <map>
 #include <chrono>
+#include <algorithm>
+#include <random>
 
 using namespace std;
 
@@ -20,7 +22,6 @@ public:
 };
 
 // === Real Logger (Console) ===
-class LoggerProxy;
 class ConsoleLogger : public Logger {
 public:
     void log(const string& message, const string& level) override {
@@ -360,17 +361,157 @@ public:
     }
 };
 
-// === Фабрика юнитов ===
+// === Factory Method Pattern ===
 class UnitFactory {
 public:
-    static unique_ptr<Unit> createUnit(const string& type, int pos) {
-        if (type == "LI" || type == "L") return make_unique<LightInfantry>(pos);
+    virtual unique_ptr<Unit> createUnit(const string& type, int pos, Logger& logger) = 0;
+    virtual void createTeam(vector<unique_ptr<Unit>>& team, const string& teamName, int balance, Logger& logger) = 0;
+    virtual ~UnitFactory() = default;
+};
+
+class ManualUnitFactory : public UnitFactory {
+public:
+    unique_ptr<Unit> createUnit(const string& type, int pos, Logger& logger) override {
+        if (type == "LI" || type == "L") {
+            vector<string> buffs;
+            cout << "Enter buffs for Light Infantry (Ho, Sp, Sh, He, or none, space-separated): ";
+            cin.ignore(numeric_limits<streamsize>::max(), '\n');
+            string buff_input;
+            getline(cin, buff_input);
+            logger.log("Input buffs: " + buff_input, "INFO");
+            istringstream iss(buff_input);
+            string buff_code;
+            while (iss >> buff_code) {
+                auto it = BUFFS.find(buff_code);
+                if (it != BUFFS.end() && find(buffs.begin(), buffs.end(), buff_code) == buffs.end()) {
+                    buffs.push_back(buff_code);
+                } else {
+                    logger.log("Invalid or duplicate buff: " + buff_code, "ERROR");
+                }
+            }
+            return make_unique<LightInfantry>(pos, buffs);
+        }
         if (type == "HI" || type == "I") return make_unique<HeavyInfantry>(pos);
         if (type == "A") return make_unique<Archer>(pos);
         if (type == "W") return make_unique<Wizard>(pos);
         if (type == "H") return make_unique<Healer>(pos);
         if (type == "Gu" || type == "G") return make_unique<GuliayGorodAdapter>(pos);
         return nullptr;
+    }
+
+    void createTeam(vector<unique_ptr<Unit>>& team, const string& teamName, int balance, Logger& logger) override {
+        cout << teamName << " - Starting balance: " << balance << "\n";
+        cout << "Units: LI (10), HI (30), A (20), W (30), H (15), Gu (25)\n";
+        cout << "Buffs for LI: Horse (5, +5 HP, +2 attacks), Spear (3, +5 attack), Shield (4, +10 armor), Helmet (2, +5 HP)\n";
+        int pos = 1;
+        while (balance > 0) {
+            string type;
+            cout << "Enter unit type (or 'done' to finish): ";
+            cin >> type;
+            logger.log("Input unit type: " + type, "INFO");
+            if (type == "done") break;
+            int buff_cost = 0;
+            vector<string> buffs;
+            unique_ptr<Unit> unit;
+            if (type == "LI" || type == "L") {
+                unit = createUnit(type, pos, logger);
+                for (const auto& buff : dynamic_cast<LightInfantry*>(unit.get())->active_buffs) {
+                    auto it = BUFFS.find(buff);
+                    if (it != BUFFS.end()) buff_cost += it->second.cost;
+                }
+            } else {
+                unit = createUnit(type, pos, logger);
+            }
+            if (unit && balance >= unit->cost + buff_cost) {
+                balance -= unit->cost + buff_cost;
+                team.push_back(std::move(unit));
+                string buff_list = buffs.empty() ? " (none)" : ": ";
+                if (type == "LI" || type == "L") {
+                    for (size_t i = 0; i < dynamic_cast<LightInfantry*>(team.back().get())->active_buffs.size(); ++i) {
+                        auto it = BUFFS.find(dynamic_cast<LightInfantry*>(team.back().get())->active_buffs[i]);
+                        buff_list += (it != BUFFS.end() ? it->second.name : dynamic_cast<LightInfantry*>(team.back().get())->active_buffs[i]);
+                        if (i < dynamic_cast<LightInfantry*>(team.back().get())->active_buffs.size() - 1) buff_list += ", ";
+                    }
+                }
+                logger.log("Added " + team.back()->name + (type == "LI" || type == "L" ? " with buffs" + buff_list : "") + ". Remaining balance: " + to_string(balance), "INFO");
+                pos++;
+            } else {
+                logger.log("Invalid unit or insufficient balance.", "ERROR");
+            }
+        }
+        logger.log("------------------", "INFO");
+    }
+};
+
+class AutomaticUnitFactory : public UnitFactory {
+public:
+    unique_ptr<Unit> createUnit(const string& type, int pos, Logger& logger) override {
+        if (type == "LI" || type == "L") {
+            vector<string> buffs;
+            int num_buffs = rand() % 3; // 0-2 buffs
+            vector<string> available_buffs = {"Ho", "Sp", "Sh", "He"};
+            shuffle(available_buffs.begin(), available_buffs.end(), std::default_random_engine(rand()));
+            for (int i = 0; i < num_buffs; ++i) {
+                buffs.push_back(available_buffs[i]);
+            }
+            string buff_input = "";
+            for (size_t i = 0; i < buffs.size(); ++i) {
+                buff_input += buffs[i];
+                if (i < buffs.size() - 1) buff_input += " ";
+            }
+            logger.log("Automatically selected buffs for Light Infantry: " + (buff_input.empty() ? "none" : buff_input), "INFO");
+            return make_unique<LightInfantry>(pos, buffs);
+        }
+        if (type == "HI" || type == "I") return make_unique<HeavyInfantry>(pos);
+        if (type == "A") return make_unique<Archer>(pos);
+        if (type == "W") return make_unique<Wizard>(pos);
+        if (type == "H") return make_unique<Healer>(pos);
+        if (type == "Gu" || type == "G") return make_unique<GuliayGorodAdapter>(pos);
+        return nullptr;
+    }
+
+    void createTeam(vector<unique_ptr<Unit>>& team, const string& teamName, int balance, Logger& logger) override {
+        cout << teamName << " - Starting balance: " << balance << "\n";
+        cout << "Units: LI (10), HI (30), A (20), W (30), H (15), Gu (25)\n";
+        cout << "Buffs for LI: Horse (5, +5 HP, +2 attacks), Spear (3, +5 attack), Shield (4, +10 armor), Helmet (2, +5 HP)\n";
+        int pos = 1;
+        vector<string> unit_types = {"LI", "HI", "A", "W", "H", "Gu"};
+        int max_units = rand() % 6 + 3; // 3-8 units
+        while (balance > 0 && team.size() < max_units) {
+            shuffle(unit_types.begin(), unit_types.end(), std::default_random_engine(rand()));
+            string type = unit_types[0];
+            logger.log("Automatically selected unit type: " + type, "INFO");
+            int buff_cost = 0;
+            vector<string> buffs;
+            unique_ptr<Unit> unit;
+            if (type == "LI" || type == "L") {
+                unit = createUnit(type, pos, logger);
+                for (const auto& buff : dynamic_cast<LightInfantry*>(unit.get())->active_buffs) {
+                    auto it = BUFFS.find(buff);
+                    if (it != BUFFS.end()) buff_cost += it->second.cost;
+                }
+            } else {
+                unit = createUnit(type, pos, logger);
+            }
+            if (unit && balance >= unit->cost + buff_cost) {
+                balance -= unit->cost + buff_cost;
+                team.push_back(std::move(unit));
+                string buff_list = buffs.empty() ? " (none)" : ": ";
+                if (type == "LI" || type == "L") {
+                    for (size_t i = 0; i < dynamic_cast<LightInfantry*>(team.back().get())->active_buffs.size(); ++i) {
+                        auto it = BUFFS.find(dynamic_cast<LightInfantry*>(team.back().get())->active_buffs[i]);
+                        buff_list += (it != BUFFS.end() ? it->second.name : dynamic_cast<LightInfantry*>(team.back().get())->active_buffs[i]);
+                        if (i < dynamic_cast<LightInfantry*>(team.back().get())->active_buffs.size() - 1) buff_list += ", ";
+                    }
+                }
+                logger.log("Automatically added " + team.back()->name + (type == "LI" || type == "L" ? " with buffs" + buff_list : "") + ". Remaining balance: " + to_string(balance), "INFO");
+                cout << "Added " + team.back()->name + (type == "LI" || type == "L" ? " with buffs" + buff_list : "") + ". Remaining balance: " + to_string(balance) << "\n";
+                pos++;
+            } else {
+                break; // Stop if balance is too low
+            }
+        }
+        logger.log("------------------", "INFO");
     }
 };
 
@@ -420,64 +561,8 @@ public:
         }
     }
 
-    void createTeam(vector<unique_ptr<Unit>>& team, const string& teamName, int balance, Logger& logger) {
-        cout << teamName << " - Starting balance: " << balance << "\n";
-        cout << "Units: LI (10), HI (30), A (20), W (30), H (15), Gu (25)\n";
-        cout << "Buffs for LI: Horse (5, +5 HP, +2 attacks), Spear (3, +5 attack), Shield (4, +10 armor), Helmet (2, +5 HP)\n";
-        int pos = 1;
-        while (balance > 0) {
-            string type;
-            cout << "Enter unit type (or 'done' to finish): ";
-            cin >> type;
-            logger.log("Input unit type: " + type, "INFO"); // Changed from DEBUG to INFO
-            if (type == "done") break;
-            vector<string> buffs;
-            if (type == "LI" || type == "L") {
-                cout << "Enter buffs for Light Infantry (Ho, Sp, Sh, He, or none, space-separated): ";
-                cin.ignore(numeric_limits<streamsize>::max(), '\n');
-                string buff_input;
-                getline(cin, buff_input);
-                logger.log("Input buffs: " + buff_input, "INFO"); // Changed from DEBUG to INFO
-                istringstream iss(buff_input);
-                string buff_code;
-                int buff_cost = 0;
-                while (iss >> buff_code) {
-                    auto it = BUFFS.find(buff_code);
-                    if (it != BUFFS.end() && find(buffs.begin(), buffs.end(), buff_code) == buffs.end()) {
-                        buffs.push_back(buff_code);
-                        buff_cost += it->second.cost;
-                    } else {
-                        logger.log("Invalid or duplicate buff: " + buff_code, "ERROR");
-                    }
-                }
-                auto unit = make_unique<LightInfantry>(pos, buffs);
-                if (balance >= unit->cost + buff_cost) {
-                    balance -= unit->cost + buff_cost;
-                    team.push_back(std::move(unit));
-                    string buff_list = buffs.empty() ? " (none)" : ": ";
-                    for (size_t i = 0; i < buffs.size(); ++i) {
-                        auto it = BUFFS.find(buffs[i]);
-                        buff_list += (it != BUFFS.end() ? it->second.name : buffs[i]);
-                        if (i < buffs.size() - 1) buff_list += ", ";
-                    }
-                    logger.log("Added " + team.back()->name + " with buffs" + buff_list + ". Remaining balance: " + to_string(balance), "INFO");
-                    pos++;
-                } else {
-                    logger.log("Insufficient balance for unit and buffs.", "ERROR");
-                }
-            } else {
-                auto unit = UnitFactory::createUnit(type, pos);
-                if (unit && balance >= unit->cost) {
-                    balance -= unit->cost;
-                    team.push_back(std::move(unit));
-                    logger.log("Added " + team.back()->name + ". Remaining balance: " + to_string(balance), "INFO");
-                    pos++;
-                } else {
-                    logger.log("Invalid unit or insufficient balance.", "ERROR");
-                }
-            }
-        }
-        logger.log("------------------", "INFO");
+    void createTeam(vector<unique_ptr<Unit>>& team, const string& teamName, int balance, UnitFactory& factory, Logger& logger) {
+        factory.createTeam(team, teamName, balance, logger);
     }
 
     void simulateRound(vector<unique_ptr<Unit>>& t1, vector<unique_ptr<Unit>>& t2,
@@ -576,7 +661,13 @@ void loadGame(const string& filename, string& t1, string& t2, int& round,
         string type;
         int pos, hp;
         if (iss >> type >> pos >> hp) {
-            auto u = UnitFactory::createUnit(type, pos);
+            unique_ptr<Unit> u;
+            if (type == "L") u = make_unique<LightInfantry>(pos);
+            else if (type == "I") u = make_unique<HeavyInfantry>(pos);
+            else if (type == "A") u = make_unique<Archer>(pos);
+            else if (type == "W") u = make_unique<Wizard>(pos);
+            else if (type == "H") u = make_unique<Healer>(pos);
+            else if (type == "G") u = make_unique<GuliayGorodAdapter>(pos);
             if (u) {
                 u->hp = hp;
                 u->loadExtra(iss);
@@ -594,7 +685,13 @@ void loadGame(const string& filename, string& t1, string& t2, int& round,
         string type;
         int pos, hp;
         if (iss >> type >> pos >> hp) {
-            auto u = UnitFactory::createUnit(type, pos);
+            unique_ptr<Unit> u;
+            if (type == "L") u = make_unique<LightInfantry>(pos);
+            else if (type == "I") u = make_unique<HeavyInfantry>(pos);
+            else if (type == "A") u = make_unique<Archer>(pos);
+            else if (type == "W") u = make_unique<Wizard>(pos);
+            else if (type == "H") u = make_unique<Healer>(pos);
+            else if (type == "G") u = make_unique<GuliayGorodAdapter>(pos);
             if (u) {
                 u->hp = hp;
                 u->loadExtra(iss);
@@ -653,8 +750,38 @@ int main() {
         getline(cin, t1);
         cout << "Enter Team 2 name: ";
         getline(cin, t2);
-        gm->createTeam(team1, t1, 100, logger);
-        gm->createTeam(team2, t2, 100, logger);
+
+        // Team 1 creation
+        cout << "Choose team creation method for " << t1 << ": 1. Manual, 2. Automatic\nChoice: ";
+        int team1_choice;
+        unique_ptr<UnitFactory> team1_factory;
+        if (!(cin >> team1_choice) || (team1_choice != 1 && team1_choice != 2)) {
+            logger.log("Invalid team creation choice for " + t1 + ". Defaulting to Manual.", "ERROR");
+            team1_factory = make_unique<ManualUnitFactory>();
+        } else {
+            if (team1_choice == 1) {
+                team1_factory = make_unique<ManualUnitFactory>();
+            } else {
+                team1_factory = make_unique<AutomaticUnitFactory>();
+            }
+        }
+        gm->createTeam(team1, t1, 100, *team1_factory, logger);
+
+        // Team 2 creation
+        cout << "Choose team creation method for " << t2 << ": 1. Manual, 2. Automatic\nChoice: ";
+        int team2_choice;
+        unique_ptr<UnitFactory> team2_factory;
+        if (!(cin >> team2_choice) || (team2_choice != 1 && team2_choice != 2)) {
+            logger.log("Invalid team creation choice for " + t2 + ". Defaulting to Manual.", "ERROR");
+            team2_factory = make_unique<ManualUnitFactory>();
+        } else {
+            if (team2_choice == 1) {
+                team2_factory = make_unique<ManualUnitFactory>();
+            } else {
+                team2_factory = make_unique<AutomaticUnitFactory>();
+            }
+        }
+        gm->createTeam(team2, t2, 100, *team2_factory, logger);
     }
 
     cout << "Type 'Start' to begin: ";
