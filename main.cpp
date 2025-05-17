@@ -8,8 +8,57 @@
 #include <sstream>
 #include <cctype>
 #include <map>
+#include <chrono>
 
 using namespace std;
+
+// === Logger Interface ===
+class Logger {
+public:
+    virtual void log(const string& message, const string& level = "INFO") = 0;
+    virtual ~Logger() = default;
+};
+
+// === Real Logger (Console) ===
+class LoggerProxy;
+class ConsoleLogger : public Logger {
+public:
+    void log(const string& message, const string& level) override {
+        cout << message << "\n";
+    }
+};
+
+// === Logger Proxy ===
+class LoggerProxy : public Logger {
+public:
+    LoggerProxy(const string& filename) : file_logger(filename.c_str(), ios::app) {
+        real_logger = make_unique<ConsoleLogger>();
+        if (!file_logger.is_open()) {
+            real_logger->log("Failed to open log file: " + filename, "ERROR");
+        } else {
+            real_logger->log("Successfully opened log file: " + filename, "DEBUG");
+        }
+    }
+    void log(const string& message, const string& level) override {
+        real_logger->log(message, level); // Log to console
+        if (file_logger.is_open()) {
+            auto now = chrono::system_clock::now();
+            auto time = chrono::system_clock::to_time_t(now);
+            string timestamp = ctime(&time);
+            timestamp.pop_back();
+            file_logger << "[" << timestamp << "] [" << level << "] " << message << "\n";
+            file_logger.flush(); // Ensure immediate write
+        }
+    }
+    ~LoggerProxy() {
+        if (file_logger.is_open()) {
+            file_logger.close();
+        }
+    }
+private:
+    unique_ptr<Logger> real_logger;
+    ofstream file_logger;
+};
 
 // === Buff Structure ===
 struct Buff {
@@ -29,9 +78,9 @@ class Unit {
 public:
     string name;
     int hp, max_hp, attack, position, cost;
-    virtual void attackUnit(Unit* target, const string& attackerTeam, const string& targetTeam) = 0;
+    virtual void attackUnit(Unit* target, const string& attackerTeam, const string& targetTeam, Logger& logger) = 0;
     virtual unique_ptr<Unit> clone() const = 0;
-    virtual void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName, int round) {}
+    virtual void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName, int round, Logger& logger) {}
     virtual void saveExtra(ofstream& out) const { out << max_hp << ' '; }
     virtual void loadExtra(istringstream& iss) { iss >> max_hp; }
     virtual void updatePositions(vector<unique_ptr<Unit>>& team) {
@@ -53,14 +102,14 @@ public:
         cost = 25;
         position = pos;
     }
-    void boostAllies(vector<unique_ptr<Unit>>& team, const string& teamName, int round) {
+    void boostAllies(vector<unique_ptr<Unit>>& team, const string& teamName, int round, Logger& logger) {
         if (round != 1) return;
         for (auto& unit : team) {
             if (unit->hp > 0 && abs(unit->position - position) == 1) {
                 unit->hp += 10;
                 unit->max_hp += 10;
-                cout << teamName << ": GuliayGorod [" << position << "] boosts "
-                     << unit->name << " [" << unit->position << "] HP and max HP to " << unit->hp << ".\n";
+                logger.log(teamName + ": GuliayGorod [" + to_string(position) + "] boosts " +
+                           unit->name + " [" + to_string(unit->position) + "] HP and max HP to " + to_string(unit->hp) + ".", "INFO");
             }
         }
     }
@@ -81,9 +130,9 @@ public:
         position = pos;
         cost = guliayGorod.cost;
     }
-    void attackUnit(Unit*, const string&, const string&) override {}
-    void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName, int round) override {
-        guliayGorod.boostAllies(team, teamName, round);
+    void attackUnit(Unit*, const string&, const string&, Logger&) override {}
+    void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName, int round, Logger& logger) override {
+        guliayGorod.boostAllies(team, teamName, round, logger);
     }
     unique_ptr<Unit> clone() const override {
         auto adapter = make_unique<GuliayGorodAdapter>(position);
@@ -112,37 +161,43 @@ public:
         applyBuffs();
     }
     void applyBuffs() {
-        hp = max_hp = 50;
+        double hp_ratio = max_hp > 0 ? static_cast<double>(hp) / max_hp : 1.0;
+        max_hp = 50;
         attack = 8;
         armor = 0;
         for (const auto& buff : active_buffs) {
             auto it = BUFFS.find(buff);
             if (it != BUFFS.end()) {
-                hp += it->second.hp_boost;
                 max_hp += it->second.hp_boost;
                 attack += it->second.attack_boost;
                 armor += it->second.armor;
             }
         }
+        hp = static_cast<int>(max_hp * hp_ratio);
+        if (hp < 0) hp = 0;
     }
-    void applyDamage(int damage) {
+    void applyDamage(int damage, Logger& logger) {
         int reduced_damage = max(0, damage - armor);
+        logger.log(name + " [" + to_string(position) + "] takes " + to_string(reduced_damage) +
+                   " damage (raw: " + to_string(damage) + ", armor: " + to_string(armor) +
+                   "). HP before: " + to_string(hp), "INFO");
         hp -= reduced_damage;
         if (reduced_damage > 0) {
             total_damage_taken += reduced_damage;
-            checkBuffLoss();
+            checkBuffLoss(logger);
         }
         if (hp < 0) hp = 0;
+        logger.log(name + " [" + to_string(position) + "] HP after: " + to_string(hp), "INFO");
     }
-    void checkBuffLoss() {
+    void checkBuffLoss(Logger& logger) {
         vector<string> remaining_buffs;
         for (const auto& buff : active_buffs) {
             auto it = BUFFS.find(buff);
             if (it != BUFFS.end() && total_damage_taken <= it->second.damage_threshold) {
                 remaining_buffs.push_back(buff);
             } else if (it != BUFFS.end()) {
-                cout << name << " [" << position << "] loses " << it->second.name
-                     << " due to " << total_damage_taken << " damage taken.\n";
+                logger.log(name + " [" + to_string(position) + "] loses " + it->second.name +
+                           " due to " + to_string(total_damage_taken) + " damage taken.", "INFO");
                 if (it->second.hp_boost > 0) {
                     max_hp -= it->second.hp_boost;
                     hp = min(hp, max_hp);
@@ -150,16 +205,16 @@ public:
             }
         }
         active_buffs = remaining_buffs;
-        applyBuffs(); // Reapply remaining buffs to update stats
+        applyBuffs();
     }
-    void attackUnit(Unit* target, const string& attackerTeam, const string& targetTeam) override {
+    void attackUnit(Unit* target, const string& attackerTeam, const string& targetTeam, Logger& logger) override {
         if (!target) return;
         int attacks = rand() % 2 + (hasBuff("Ho") ? 4 : 2);
         for (int i = 0; i < attacks && target->hp > 0; i++) {
-            cout << attackerTeam << ": " << name << " [" << position << "] attacks "
-                 << targetTeam << ": " << target->name << " [" << target->position << "] and deals " << attack << " damage.\n";
+            logger.log(attackerTeam + ": " + name + " [" + to_string(position) + "] attacks " +
+                       targetTeam + ": " + target->name + " [" + to_string(target->position) + "] and deals " + to_string(attack) + " damage.", "INFO");
             if (auto li = dynamic_cast<LightInfantry*>(target)) {
-                li->applyDamage(attack);
+                li->applyDamage(attack, logger);
             } else {
                 target->hp -= attack;
             }
@@ -201,12 +256,12 @@ public:
     HeavyInfantry(int pos) {
         name = "Heavy Infantry"; hp = max_hp = 100; attack = 20; position = pos; cost = 30;
     }
-    void attackUnit(Unit* target, const string& attackerTeam, const string& targetTeam) override {
+    void attackUnit(Unit* target, const string& attackerTeam, const string& targetTeam, Logger& logger) override {
         if (!target) return;
-        cout << attackerTeam << ": " << name << " [" << position << "] attacks "
-             << targetTeam << ": " << target->name << " [" << target->position << "] and deals " << attack << " damage.\n";
+        logger.log(attackerTeam + ": " + name + " [" + to_string(position) + "] attacks " +
+                   targetTeam + ": " + target->name + " [" + to_string(target->position) + "] and deals " + to_string(attack) + " damage.", "INFO");
         if (auto li = dynamic_cast<LightInfantry*>(target)) {
-            li->applyDamage(attack);
+            li->applyDamage(attack, logger);
         } else {
             target->hp -= attack;
         }
@@ -219,14 +274,14 @@ public:
     Archer(int pos) {
         name = "Archer"; hp = max_hp = 40; attack = 7; position = pos; cost = 20;
     }
-    void attackUnit(Unit* target, const string& attackerTeam, const string& targetTeam) override {
+    void attackUnit(Unit* target, const string& attackerTeam, const string& targetTeam, Logger& logger) override {
         if (!target) return;
         int attacks = rand() % 5 + 1;
         for (int i = 0; i < attacks && target->hp > 0; i++) {
-            cout << attackerTeam << ": " << name << " [" << position << "] attacks "
-                 << targetTeam << ": " << target->name << " [" << target->position << "] and deals " << attack << " damage.\n";
+            logger.log(attackerTeam + ": " + name + " [" + to_string(position) + "] attacks " +
+                       targetTeam + ": " + target->name + " [" + to_string(target->position) + "] and deals " + to_string(attack) + " damage.", "INFO");
             if (auto li = dynamic_cast<LightInfantry*>(target)) {
-                li->applyDamage(attack);
+                li->applyDamage(attack, logger);
             } else {
                 target->hp -= attack;
             }
@@ -240,17 +295,17 @@ public:
     Wizard(int pos) {
         name = "Wizard"; hp = max_hp = 30; attack = 5; position = pos; cost = 30;
     }
-    void attackUnit(Unit* target, const string& attackerTeam, const string& targetTeam) override {
+    void attackUnit(Unit* target, const string& attackerTeam, const string& targetTeam, Logger& logger) override {
         if (!target) return;
-        cout << attackerTeam << ": " << name << " [" << position << "] attacks "
-             << targetTeam << ": " << target->name << " [" << target->position << "] and deals " << attack << " damage.\n";
+        logger.log(attackerTeam + ": " + name + " [" + to_string(position) + "] attacks " +
+                   targetTeam + ": " + target->name + " [" + to_string(target->position) + "] and deals " + to_string(attack) + " damage.", "INFO");
         if (auto li = dynamic_cast<LightInfantry*>(target)) {
-            li->applyDamage(attack);
+            li->applyDamage(attack, logger);
         } else {
             target->hp -= attack;
         }
     }
-    void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName, int round) override {
+    void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName, int round, Logger& logger) override {
         if (rand() % 100 < 10) {
             for (size_t i = 0; i < team.size(); i++) {
                 if (team[i]->hp > 0 &&
@@ -259,8 +314,8 @@ public:
                     string originalName = team[i]->name;
                     auto cloned = team[i]->clone();
                     cloned->position = i + 2;
-                    team.insert(team.begin() + i + 1, move(cloned));
-                    cout << teamName << ": " << name << " [" << position << "] clones " << originalName << " at position " << i + 2 << "!\n";
+                    team.insert(team.begin() + i + 1, std::move(cloned));
+                    logger.log(teamName + ": " + name + " [" + to_string(position) + "] clones " + originalName + " at position " + to_string(i + 2) + "!", "INFO");
                     updatePositions(team);
                     break;
                 }
@@ -276,8 +331,8 @@ public:
     Healer(int pos) {
         name = "Healer"; hp = max_hp = 50; attack = 8; position = pos; cost = 15;
     }
-    void attackUnit(Unit*, const string&, const string&) override {}
-    void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName, int round) override {
+    void attackUnit(Unit*, const string&, const string&, Logger&) override {}
+    void specialAbility(vector<unique_ptr<Unit>>& team, const string& teamName, int round, Logger& logger) override {
         if (healing_charges > 0) {
             for (auto& unit : team) {
                 if (unit->hp > 0 && unit->hp < 30 &&
@@ -285,8 +340,8 @@ public:
                     dynamic_cast<GuliayGorodAdapter*>(unit.get()) == nullptr) {
                     unit->hp += 5;
                     healing_charges--;
-                    cout << teamName << ": " << name << " [" << position << "] heals "
-                         << unit->name << " [" << unit->position << "] for 5 HP. Charges left: " << healing_charges << ".\n";
+                    logger.log(teamName + ": " + name + " [" + to_string(position) + "] heals " +
+                               unit->name + " [" + to_string(unit->position) + "] for 5 HP. Charges left: " + to_string(healing_charges) + ".", "INFO");
                     break;
                 }
             }
@@ -329,26 +384,27 @@ public:
         return instance;
     }
 
-    void displayTeam(const vector<unique_ptr<Unit>>& team, const string& teamName) {
-        cout << teamName << ":\n";
+    void displayTeam(const vector<unique_ptr<Unit>>& team, const string& teamName, Logger& logger) {
+        logger.log(teamName + ":", "INFO");
         if (team.empty()) {
-            cout << "No units remaining.\n";
+            logger.log("No units remaining.", "INFO");
             return;
         }
         for (const auto& unit : team) {
-            cout << "[" << unit->position << "] " << unit->name << " - " << unit->hp << "/" << unit->max_hp << " HP";
+            string unit_info = "[" + to_string(unit->position) + "] " + unit->name + " - " +
+                               to_string(unit->hp) + "/" + to_string(unit->max_hp) + " HP";
             if (auto li = dynamic_cast<LightInfantry*>(unit.get())) {
                 if (!li->active_buffs.empty()) {
-                    cout << " (Buffs: ";
+                    unit_info += " (Buffs: ";
                     for (size_t i = 0; i < li->active_buffs.size(); ++i) {
                         auto it = BUFFS.find(li->active_buffs[i]);
-                        cout << (it != BUFFS.end() ? it->second.name : li->active_buffs[i]);
-                        if (i < li->active_buffs.size() - 1) cout << ", ";
+                        unit_info += (it != BUFFS.end() ? it->second.name : li->active_buffs[i]);
+                        if (i < li->active_buffs.size() - 1) unit_info += ", ";
                     }
-                    cout << ")";
+                    unit_info += ")";
                 }
             }
-            cout << "\n";
+            logger.log(unit_info, "INFO");
         }
     }
 
@@ -364,7 +420,7 @@ public:
         }
     }
 
-    void createTeam(vector<unique_ptr<Unit>>& team, const string& teamName, int balance) {
+    void createTeam(vector<unique_ptr<Unit>>& team, const string& teamName, int balance, Logger& logger) {
         cout << teamName << " - Starting balance: " << balance << "\n";
         cout << "Units: LI (10), HI (30), A (20), W (30), H (15), Gu (25)\n";
         cout << "Buffs for LI: Horse (5, +5 HP, +2 attacks), Spear (3, +5 attack), Shield (4, +10 armor), Helmet (2, +5 HP)\n";
@@ -373,6 +429,7 @@ public:
             string type;
             cout << "Enter unit type (or 'done' to finish): ";
             cin >> type;
+            logger.log("Input unit type: " + type, "INFO"); // Changed from DEBUG to INFO
             if (type == "done") break;
             vector<string> buffs;
             if (type == "LI" || type == "L") {
@@ -380,6 +437,7 @@ public:
                 cin.ignore(numeric_limits<streamsize>::max(), '\n');
                 string buff_input;
                 getline(cin, buff_input);
+                logger.log("Input buffs: " + buff_input, "INFO"); // Changed from DEBUG to INFO
                 istringstream iss(buff_input);
                 string buff_code;
                 int buff_cost = 0;
@@ -389,61 +447,57 @@ public:
                         buffs.push_back(buff_code);
                         buff_cost += it->second.cost;
                     } else {
-                        cout << "Invalid or duplicate buff: " << buff_code << "\n";
+                        logger.log("Invalid or duplicate buff: " + buff_code, "ERROR");
                     }
                 }
                 auto unit = make_unique<LightInfantry>(pos, buffs);
                 if (balance >= unit->cost + buff_cost) {
                     balance -= unit->cost + buff_cost;
-                    team.push_back(move(unit));
-                    cout << "Added " << team.back()->name << " with buffs";
-                    if (buffs.empty()) cout << " (none)";
-                    else {
-                        cout << ": ";
-                        for (size_t i = 0; i < buffs.size(); ++i) {
-                            auto it = BUFFS.find(buffs[i]);
-                            cout << (it != BUFFS.end() ? it->second.name : buffs[i]);
-                            if (i < buffs.size() - 1) cout << ", ";
-                        }
+                    team.push_back(std::move(unit));
+                    string buff_list = buffs.empty() ? " (none)" : ": ";
+                    for (size_t i = 0; i < buffs.size(); ++i) {
+                        auto it = BUFFS.find(buffs[i]);
+                        buff_list += (it != BUFFS.end() ? it->second.name : buffs[i]);
+                        if (i < buffs.size() - 1) buff_list += ", ";
                     }
-                    cout << ". Remaining balance: " << balance << "\n";
+                    logger.log("Added " + team.back()->name + " with buffs" + buff_list + ". Remaining balance: " + to_string(balance), "INFO");
                     pos++;
                 } else {
-                    cout << "Insufficient balance for unit and buffs.\n";
+                    logger.log("Insufficient balance for unit and buffs.", "ERROR");
                 }
             } else {
                 auto unit = UnitFactory::createUnit(type, pos);
                 if (unit && balance >= unit->cost) {
                     balance -= unit->cost;
-                    team.push_back(move(unit));
-                    cout << "Added " << team.back()->name << ". Remaining balance: " << balance << "\n";
+                    team.push_back(std::move(unit));
+                    logger.log("Added " + team.back()->name + ". Remaining balance: " + to_string(balance), "INFO");
                     pos++;
                 } else {
-                    cout << "Invalid unit or insufficient balance.\n";
+                    logger.log("Invalid unit or insufficient balance.", "ERROR");
                 }
             }
         }
-        cout << "------------------\n";
+        logger.log("------------------", "INFO");
     }
 
     void simulateRound(vector<unique_ptr<Unit>>& t1, vector<unique_ptr<Unit>>& t2,
-                       const string& n1, const string& n2, int round) {
-        cout << "\nRound " << round << ":\n";
+                       const string& n1, const string& n2, int round, Logger& logger) {
+        logger.log("\nRound " + to_string(round) + ":", "INFO");
         for (auto& u : t1) {
             if (u->hp <= 0) continue;
-            u->specialAbility(t1, n1, round);
+            u->specialAbility(t1, n1, round, logger);
             if (t2.empty()) break;
             if (dynamic_cast<Archer*>(u.get())) {
                 for (auto& tgt : t2) {
                     if (tgt->hp > 0 && abs(u->position - tgt->position) <= 3) {
-                        u->attackUnit(tgt.get(), n1, n2);
+                        u->attackUnit(tgt.get(), n1, n2, logger);
                         break;
                     }
                 }
             } else if (u->position == 1) {
                 for (auto& tgt : t2) {
                     if (tgt->hp > 0 && tgt->position == 1) {
-                        u->attackUnit(tgt.get(), n1, n2);
+                        u->attackUnit(tgt.get(), n1, n2, logger);
                         break;
                     }
                 }
@@ -452,19 +506,19 @@ public:
 
         for (auto& u : t2) {
             if (u->hp <= 0) continue;
-            u->specialAbility(t2, n2, round);
+            u->specialAbility(t2, n2, round, logger);
             if (t1.empty()) break;
             if (dynamic_cast<Archer*>(u.get())) {
                 for (auto& tgt : t1) {
                     if (tgt->hp > 0 && abs(u->position - tgt->position) <= 3) {
-                        u->attackUnit(tgt.get(), n2, n1);
+                        u->attackUnit(tgt.get(), n2, n1, logger);
                         break;
                     }
                 }
             } else if (u->position == 1) {
                 for (auto& tgt : t1) {
                     if (tgt->hp > 0 && tgt->position == 1) {
-                        u->attackUnit(tgt.get(), n2, n1);
+                        u->attackUnit(tgt.get(), n2, n1, logger);
                         break;
                     }
                 }
@@ -476,10 +530,10 @@ GameManager* GameManager::instance = nullptr;
 
 // === Сохранение и загрузка ===
 void saveGame(const string& filename, const string& t1, const string& t2, int round,
-              const vector<unique_ptr<Unit>>& team1, const vector<unique_ptr<Unit>>& team2) {
+              const vector<unique_ptr<Unit>>& team1, const vector<unique_ptr<Unit>>& team2, Logger& logger) {
     ofstream out(filename);
     if (!out) {
-        cout << "Error: Could not save game to " << filename << "\n";
+        logger.log("Error: Could not save game to " + filename, "ERROR");
         return;
     }
     out << t1 << '\n' << t2 << '\n' << round << '\n';
@@ -498,10 +552,10 @@ void saveGame(const string& filename, const string& t1, const string& t2, int ro
 }
 
 void loadGame(const string& filename, string& t1, string& t2, int& round,
-              vector<unique_ptr<Unit>>& team1, vector<unique_ptr<Unit>>& team2) {
+              vector<unique_ptr<Unit>>& team1, vector<unique_ptr<Unit>>& team2, Logger& logger) {
     ifstream in(filename);
     if (!in) {
-        cout << "Error: Could not open file " << filename << "\n";
+        logger.log("Error: Could not open file " + filename, "ERROR");
         return;
     }
     getline(in, t1);
@@ -511,7 +565,7 @@ void loadGame(const string& filename, string& t1, string& t2, int& round,
     try {
         round = stoi(roundStr);
     } catch (...) {
-        cout << "Error: Invalid round number in save file\n";
+        logger.log("Error: Invalid round number in save file", "ERROR");
         in.close();
         return;
     }
@@ -526,12 +580,12 @@ void loadGame(const string& filename, string& t1, string& t2, int& round,
             if (u) {
                 u->hp = hp;
                 u->loadExtra(iss);
-                team1.push_back(move(u));
+                team1.push_back(std::move(u));
             } else {
-                cout << "Warning: Invalid unit type '" << type << "' in team1\n";
+                logger.log("Warning: Invalid unit type '" + type + "' in team1", "ERROR");
             }
         } else {
-            cout << "Warning: Invalid line in team1: " << line << "\n";
+            logger.log("Warning: Invalid line in team1: " + line, "ERROR");
         }
     }
 
@@ -544,16 +598,15 @@ void loadGame(const string& filename, string& t1, string& t2, int& round,
             if (u) {
                 u->hp = hp;
                 u->loadExtra(iss);
-                team2.push_back(move(u));
+                team2.push_back(std::move(u));
             } else {
-                cout << "Warning: Invalid unit type '" << type << "' in team2\n";
+                logger.log("Warning: Invalid unit type '" + type + "' in team2", "ERROR");
             }
         } else {
-            cout << "Warning: Invalid line in team2: " << line << "\n";
+            logger.log("Warning: Invalid line in team2: " + line, "ERROR");
         }
     }
 
-    // Reassign positions to ensure consistency
     for (size_t i = 0; i < team1.size(); i++) {
         team1[i]->position = i + 1;
     }
@@ -567,6 +620,7 @@ void loadGame(const string& filename, string& t1, string& t2, int& round,
 // === Главная функция ===
 int main() {
     srand(time(0));
+    LoggerProxy logger("game.log");
     GameManager* gm = GameManager::getInstance();
     vector<unique_ptr<Unit>> team1, team2;
     string t1, t2, input;
@@ -575,14 +629,17 @@ int main() {
     cout << "1. Start New Game\n2. Load Game\nChoice: ";
     int choice;
     if (!(cin >> choice)) {
+        logger.log("Invalid input. Exiting.", "ERROR");
         cout << "Invalid input. Exiting.\n";
         return 1;
     }
     cin.ignore(numeric_limits<streamsize>::max(), '\n');
 
     if (choice == 2) {
-        loadGame("save.txt", t1, t2, round, team1, team2);
+        logger.log("Loading game session from save file", "INFO");
+        loadGame("save.txt", t1, t2, round, team1, team2, logger);
         if (t1.empty() || t2.empty()) {
+            logger.log("Failed to load game. Starting new game.", "INFO");
             cout << "Failed to load game. Starting new game.\n";
             choice = 1;
         } else {
@@ -591,12 +648,13 @@ int main() {
     }
 
     if (choice == 1) {
+        logger.log("Starting new game session", "INFO");
         cout << "Enter Team 1 name: ";
         getline(cin, t1);
         cout << "Enter Team 2 name: ";
         getline(cin, t2);
-        gm->createTeam(team1, t1, 100);
-        gm->createTeam(team2, t2, 100);
+        gm->createTeam(team1, t1, 100, logger);
+        gm->createTeam(team2, t2, 100, logger);
     }
 
     cout << "Type 'Start' to begin: ";
@@ -604,15 +662,15 @@ int main() {
     if (input != "Start") return 0;
 
     while (gm->isTeamAlive(team1) && gm->isTeamAlive(team2)) {
-        gm->simulateRound(team1, team2, t1, t2, round++);
+        gm->simulateRound(team1, team2, t1, t2, round++, logger);
         gm->cleanAndShift(team1);
         gm->cleanAndShift(team2);
-        gm->displayTeam(team1, t1);
-        gm->displayTeam(team2, t2);
+        gm->displayTeam(team1, t1, logger);
+        gm->displayTeam(team2, t2, logger);
         cout << "Save game? (y/n): ";
         cin >> input;
-        if (input == "y") saveGame("save.txt", t1, t2, round, team1, team2);
-        cout << "------------------\n";
+        if (input == "y") saveGame("save.txt", t1, t2, round, team1, team2, logger);
+        logger.log("------------------", "INFO");
     }
 
     cout << "\n" << (gm->isTeamAlive(team1) ? t1 : t2) << " wins!\n";
